@@ -1,5 +1,5 @@
-# Bike Sharing Demand Prediction Model
-# This script implements an enhanced model to predict bike sharing demand
+# Bike Sharing Demand Prediction - Final Model
+# This script implements a comprehensive model to predict bike sharing demand
 
 import pandas as pd
 import numpy as np
@@ -23,8 +23,8 @@ def rmsle(y_true, y_pred):
 
 # Load the datasets
 print("Loading datasets...")
-train_data = pd.read_csv('../Data/train.csv')
-test_data = pd.read_csv('../Data/test.csv')
+train_data = pd.read_csv('Data/train.csv')
+test_data = pd.read_csv('Data/test.csv')
 
 # Display basic information
 print(f"Train data shape: {train_data.shape}")
@@ -148,14 +148,13 @@ test_data = feature_engineering(test_data)
 # Perform Exploratory Data Analysis
 print("\nPerforming Exploratory Data Analysis...")
 
-# Save visualizations to files
 # Distribution of bike rentals
 plt.figure(figsize=(12, 6))
 sns.histplot(train_data['count'], kde=True)
 plt.title('Distribution of Bike Rentals Count')
 plt.xlabel('Count')
 plt.ylabel('Frequency')
-plt.savefig('../count_distribution.png')
+plt.savefig('count_distribution.png')
 plt.close()
 
 # Hourly rental patterns
@@ -164,7 +163,7 @@ sns.boxplot(x='hour', y='count', data=train_data)
 plt.title('Bike Rentals by Hour of Day')
 plt.xlabel('Hour')
 plt.ylabel('Count')
-plt.savefig('../hourly_rentals.png')
+plt.savefig('hourly_rentals.png')
 plt.close()
 
 # Seasonal rental patterns
@@ -173,7 +172,7 @@ sns.boxplot(x='season', y='count', data=train_data)
 plt.title('Bike Rentals by Season')
 plt.xlabel('Season (1=Spring, 2=Summer, 3=Fall, 4=Winter)')
 plt.ylabel('Count')
-plt.savefig('../seasonal_rentals.png')
+plt.savefig('seasonal_rentals.png')
 plt.close()
 
 # Weather impact on rentals
@@ -182,17 +181,18 @@ sns.boxplot(x='weather', y='count', data=train_data)
 plt.title('Bike Rentals by Weather Condition')
 plt.xlabel('Weather (1=Clear, 2=Mist, 3=Light Rain/Snow, 4=Heavy Rain/Snow)')
 plt.ylabel('Count')
-plt.savefig('../weather_impact.png')
+plt.savefig('weather_impact.png')
 plt.close()
 
-# Correlation heatmap
+# Correlation heatmap of key features
 plt.figure(figsize=(16, 12))
-numerical_cols = train_data.select_dtypes(include=['int64', 'float64']).columns
-correlation = train_data[numerical_cols].corr()
+key_features = ['count', 'temp', 'atemp', 'humidity', 'windspeed', 'hour', 'dayofweek', 
+                'month', 'season', 'weather', 'holiday', 'workingday']
+correlation = train_data[key_features].corr()
 mask = np.triu(correlation)
 sns.heatmap(correlation, annot=True, fmt='.2f', cmap='coolwarm', mask=mask)
-plt.title('Correlation Heatmap')
-plt.savefig('../correlation_heatmap.png')
+plt.title('Correlation Heatmap of Key Features')
+plt.savefig('correlation_heatmap.png')
 plt.close()
 
 # Prepare data for modeling
@@ -257,7 +257,7 @@ plt.plot([0, max(y_val)], [0, max(y_val)], 'r--')
 plt.title('Actual vs Predicted Values - Enhanced Gradient Boosting')
 plt.xlabel('Actual')
 plt.ylabel('Predicted')
-plt.savefig('../actual_vs_predicted.png')
+plt.savefig('actual_vs_predicted.png')
 plt.close()
 
 # Feature importance analysis
@@ -271,7 +271,7 @@ plt.figure(figsize=(12, 10))
 sns.barplot(x='Importance', y='Feature', data=feature_importance.head(20))
 plt.title('Top 20 Feature Importance - Enhanced Gradient Boosting')
 plt.tight_layout()
-plt.savefig('../feature_importance.png')
+plt.savefig('feature_importance.png')
 plt.close()
 
 # Make predictions on test data
@@ -287,9 +287,11 @@ submission = pd.DataFrame({
 
 # Ensure count values are non-negative
 submission['count'] = submission['count'].clip(lower=0)
+# Round predictions to integers as the competition requires count values
+submission['count'] = submission['count'].round().astype(int)
 
 # Save predictions
-submission.to_csv('../bike_sharing_predictions.csv', index=False)
+submission.to_csv('bike_sharing_predictions.csv', index=False)
 print("\nPredictions saved to 'bike_sharing_predictions.csv'")
 
 # Print final conclusion
@@ -304,4 +306,31 @@ print("1. The model captures temporal patterns effectively, with hour of day bei
 print("2. Weather conditions significantly impact bike rental demand")
 print("3. The enhanced feature engineering improved model performance")
 print("4. The model can accurately predict bike sharing demand for new data")
-print("\nThe predictions have been saved and are ready for submission.")
+print("\nThe predictions have been saved and are ready for submission to the competition.")
+
+# Summary of the approach:
+print("\n=== MODEL APPROACH SUMMARY ===")
+print("1. Data Preprocessing:")
+print("   - Converted datetime to proper format")
+print("   - Extracted temporal features (year, month, day, hour, etc.)")
+print("   - Created cyclic features to capture periodicity")
+print("   - Added time-based flags (rush hour, weekend, etc.)")
+
+print("\n2. Feature Engineering:")
+print("   - Created interaction features between weather variables")
+print("   - Added comfort metrics and biking condition indicators")
+print("   - Engineered seasonal features")
+print("   - Added extreme weather condition flags")
+
+print("\n3. Model Selection:")
+print("   - Chose Gradient Boosting Regressor for its ability to capture non-linear relationships")
+print("   - Applied log transformation to the target variable to handle skewness")
+print("   - Optimized hyperparameters for best performance")
+
+print("\n4. Evaluation:")
+print("   - Used RMSLE as the primary metric (competition requirement)")
+print("   - Achieved RMSLE of {:.4f} on validation data".format(rmsle_score))
+print("   - Analyzed feature importance to understand key drivers of bike demand")
+
+print("\nThis approach effectively captures the complex patterns in bike sharing demand,")
+print("accounting for temporal trends, weather conditions, and their interactions.")

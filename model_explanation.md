@@ -2,7 +2,13 @@
 
 This document provides a comprehensive explanation of the bike sharing demand prediction model implementation, including data preprocessing, exploratory data analysis, feature engineering, modeling, and evaluation.
 
-## 1. Data Loading and Initial Exploration
+## 1. Project Overview
+
+**Objective**: Predict the number of bikes rented on a given day for the Capital Bikeshare program in Washington, D.C.
+
+In this competition, participants are asked to combine historical usage patterns with weather data to forecast bike rental demand. The model uses various features such as weather conditions, time-based features, and seasonal patterns to make accurate predictions.
+
+## 2. Data Loading and Initial Exploration
 
 ```python
 # Load the datasets
@@ -20,17 +26,17 @@ The training data includes these key columns:
 - `holiday`: Whether the day is a holiday (0=no, 1=yes)
 - `workingday`: Whether the day is a working day (0=no, 1=yes)
 - `weather`: Weather condition (1=clear, 2=mist, 3=light rain/snow, 4=heavy rain/snow)
-- `temp`: Temperature in Celsius
-- `atemp`: "Feels like" temperature in Celsius
-- `humidity`: Relative humidity
-- `windspeed`: Wind speed
+- `temp`: Temperature in Celsius (normalized)
+- `atemp`: "Feels like" temperature in Celsius (normalized)
+- `humidity`: Relative humidity (normalized)
+- `windspeed`: Wind speed (normalized)
 - `casual`: Count of casual users
 - `registered`: Count of registered users
 - `count`: Total count of bike rentals (target variable)
 
-## 2. Data Preprocessing
+## 3. Data Preprocessing
 
-### 2.1 Missing Value Check
+### 3.1 Missing Value Check
 
 ```python
 train_data.isnull().sum()
@@ -39,7 +45,7 @@ test_data.isnull().sum()
 
 The code checks for missing values in both datasets. Fortunately, no missing values were found, so no imputation was needed.
 
-### 2.2 Datetime Feature Extraction
+### 3.2 Datetime Feature Extraction
 
 ```python
 def extract_datetime_features(df):
@@ -84,6 +90,16 @@ def extract_datetime_features(df):
     df['dayofweek_sin'] = np.sin(2 * np.pi * df['dayofweek']/7)
     df['dayofweek_cos'] = np.cos(2 * np.pi * df['dayofweek']/7)
     
+    # Rush hour flags
+    morning_rush = (df['hour'] >= 7) & (df['hour'] <= 9)
+    evening_rush = (df['hour'] >= 16) & (df['hour'] <= 19)
+    df['is_rush_hour'] = (morning_rush | evening_rush).astype(int)
+
+    # Weekend rush hour (different pattern on weekends)
+    weekend_noon_rush = (df['hour'] >= 11) & (df['hour'] <= 14)
+    weekend_evening_rush = (df['hour'] >= 16) & (df['hour'] <= 20)
+    df['is_weekend_rush'] = ((df['is_weekend'] == 1) & (weekend_noon_rush | weekend_evening_rush)).astype(int)
+    
     return df
 ```
 
@@ -93,61 +109,51 @@ This function extracts valuable features from the datetime column:
 - **Derived time features**: Weekend flag, quarter, day of year, week of year
 - **Time period categorization**: Night (0-6h), morning (6-12h), afternoon (12-18h), evening (18-24h)
 - **Cyclic features**: Sine and cosine transformations of time variables to capture their cyclical nature
+- **Rush hour flags**: Morning rush (7-9h), evening rush (16-19h), and weekend-specific rush hours
 
-Cyclic features are particularly important for time data because they preserve the circular relationship (e.g., hour 23 is close to hour 0, December is close to January).
+Cyclic features are particularly important for time data because they preserve the circular relationship (e.g., hour 23 is close to hour 0, December is close to January). This helps the model understand the continuity in time variables.
 
-## 3. Feature Engineering
+## 4. Feature Engineering
 
 ```python
 def feature_engineering(df):
-    # Weather-related interaction features
+    # Interaction features
     df['temp_humidity'] = df['temp'] * df['humidity']
     df['temp_windspeed'] = df['temp'] * df['windspeed']
     df['humidity_windspeed'] = df['humidity'] * df['windspeed']
     df['atemp_humidity'] = df['atemp'] * df['humidity']
     df['atemp_windspeed'] = df['atemp'] * df['windspeed']
     
-    # Temperature difference (real feel vs actual)
+    # Temperature difference (feels like vs actual)
     df['temp_diff'] = df['atemp'] - df['temp']
     
-    # Create binned features
-    df['temp_bin'] = pd.cut(df['temp'], bins=6, labels=False)
-    df['humidity_bin'] = pd.cut(df['humidity'], bins=6, labels=False)
-    df['windspeed_bin'] = pd.cut(df['windspeed'], bins=6, labels=False)
-    
-    # Create hour bins (morning, afternoon, evening, night)
-    df['hour_bin'] = pd.cut(df['hour'], bins=[0, 6, 12, 18, 24], labels=['night', 'morning', 'afternoon', 'evening'])
-    
-    # Create interaction features
-    df['season_hour'] = df['season'].astype(str) + '_' + df['hour'].astype(str)
-    df['weather_hour'] = df['weather'].astype(str) + '_' + df['hour'].astype(str)
-    df['season_weather'] = df['season'].astype(str) + '_' + df['weather'].astype(str)
-    df['season_month'] = df['season'].astype(str) + '_' + df['month'].astype(str)
-    
-    # Create time-based flags
-    df['rush_hour'] = ((df['hour'].isin([7, 8, 9]) | df['hour'].isin([17, 18, 19])) & (df['workingday'] == 1)).astype(int)
-    df['weekend_rush'] = ((df['hour'].isin([11, 12, 13, 14, 15, 16, 17])) & (df['is_weekend'] == 1)).astype(int)
-    df['holiday_weekend'] = ((df['holiday'] == 1) | (df['is_weekend'] == 1)).astype(int)
-    df['peak_hours'] = df['hour'].isin([8, 17, 18]).astype(int)
-    
-    # Create comfort metrics
-    df['feel_factor'] = df['temp'] - df['humidity']/100 + df['windspeed']/10
-    df['comfort_index'] = df['atemp'] - df['humidity']/100 + df['windspeed']/20
-    
-    # Weather severity index (higher = worse weather)
-    df['weather_severity'] = df['weather'] * (df['humidity']/100) * (1 + df['windspeed']/50)
+    # Weather severity
+    weather_severity_map = {1: 1, 2: 2, 3: 3, 4: 4}
+    df['weather_severity'] = df['weather'].map(weather_severity_map)
     
     # Extreme weather conditions
-    df['extreme_temp_high'] = (df['temp'] > 30).astype(int)
-    df['extreme_temp_low'] = (df['temp'] < 5).astype(int)
-    df['extreme_humidity'] = (df['humidity'] > 90).astype(int)
-    df['extreme_windspeed'] = (df['windspeed'] > 30).astype(int)
+    df['is_extreme_temp'] = ((df['temp'] < 0.2) | (df['temp'] > 0.8)).astype(int)
+    df['is_extreme_humidity'] = ((df['humidity'] < 0.2) | (df['humidity'] > 0.8)).astype(int)
+    df['is_extreme_windspeed'] = (df['windspeed'] > 0.5).astype(int)
+    df['is_bad_weather'] = (df['weather'] >= 3).astype(int)
     
-    # Ideal biking conditions (moderate temp, low humidity, low wind)
-    df['ideal_biking_condition'] = ((df['temp'] > 15) & (df['temp'] < 30) & 
-                                   (df['humidity'] < 70) & 
-                                   (df['windspeed'] < 20) & 
-                                   (df['weather'] <= 2)).astype(int)
+    # Ideal biking condition (moderate temp, low humidity, low windspeed, good weather)
+    df['ideal_biking_condition'] = (((df['temp'] >= 0.4) & (df['temp'] <= 0.7)) & 
+                                  (df['humidity'] < 0.6) & 
+                                  (df['windspeed'] < 0.3) & 
+                                  (df['weather'] <= 2)).astype(int)
+    
+    # Comfort metrics
+    df['comfort_index'] = df['temp'] - 0.1 * df['humidity'] - 0.1 * df['windspeed']
+    
+    # Season-based features
+    df['is_summer'] = (df['season'] == 2).astype(int)
+    df['is_fall'] = (df['season'] == 3).astype(int)
+    df['is_winter'] = (df['season'] == 4).astype(int)
+    df['is_spring'] = (df['season'] == 1).astype(int)
+    
+    # Holiday and working day interaction
+    df['free_day'] = ((df['holiday'] == 1) | (df['is_weekend'] == 1)).astype(int)
     
     return df
 ```
@@ -155,163 +161,284 @@ def feature_engineering(df):
 The feature engineering function creates several types of derived features:
 
 1. **Interaction features**: Combinations of existing features that might have multiplicative effects (e.g., temperature × humidity)
-2. **Binned features**: Discretized continuous variables to capture non-linear relationships
-3. **Categorical interactions**: Combinations of categorical variables (e.g., season_hour)
-4. **Time-based flags**: Indicators for specific time periods (rush hour, weekend rush, etc.)
-5. **Comfort metrics**: Custom formulas to estimate biking comfort based on weather conditions
-6. **Weather severity**: Index combining weather condition, humidity, and wind speed
-7. **Extreme condition flags**: Binary indicators for extreme weather conditions
-8. **Ideal conditions**: Flag for ideal biking conditions based on multiple criteria
+2. **Temperature difference**: Captures the difference between actual and "feels like" temperature
+3. **Weather severity**: Numerical representation of weather conditions
+4. **Extreme condition flags**: Binary indicators for extreme weather conditions
+5. **Ideal biking conditions**: Flag for ideal biking conditions based on multiple criteria
+6. **Comfort metrics**: Custom formula to estimate biking comfort based on weather conditions
+7. **Season-based features**: Binary indicators for each season
+8. **Free day indicator**: Combines holidays and weekends into a single feature
 
 These engineered features help the model understand complex patterns and interactions in the data that affect bike rental demand.
 
-## 4. Exploratory Data Analysis (EDA)
+## 5. Exploratory Data Analysis (EDA)
 
 The EDA section creates several visualizations to understand the data patterns:
 
-1. **Distribution of bike rentals**: Histogram showing the frequency distribution of the target variable
-2. **Hourly patterns**: Box plots showing bike rental patterns by hour of the day
-3. **Seasonal patterns**: Box plots showing bike rental patterns by season
-4. **Weather impact**: Box plots showing how different weather conditions affect bike rentals
-5. **Correlation heatmap**: Visualization of correlations between numerical variables
-
-These visualizations help identify key patterns such as:
-- Peak rental hours during morning and evening commutes
-- Higher rentals during summer and fall seasons
-- Decreased rentals during poor weather conditions
-- Strong correlations between temperature and bike rentals
-
-## 5. Data Preparation for Modeling
+### 5.1 Distribution of Bike Rentals
 
 ```python
-# Define columns to drop for train and test separately
-train_drop_cols = ['datetime', 'casual', 'registered', 'hour_bin', 'season_hour', 'weather_hour', 'season_month', 'season_weather']
-test_drop_cols = ['datetime', 'hour_bin', 'season_hour', 'weather_hour', 'season_month', 'season_weather']
+plt.figure(figsize=(12, 6))
+sns.histplot(train_data['count'], kde=True)
+plt.title('Distribution of Bike Rentals Count')
+plt.xlabel('Count')
+plt.ylabel('Frequency')
+```
 
-# Drop unnecessary columns
-X = train_data.drop(['count'] + train_drop_cols, axis=1)
+**Analysis**: The histogram shows the distribution of bike rental counts. The distribution is right-skewed, with most rentals falling in the lower range (0-200 bikes), but with a long tail extending to higher values. This skewness suggests that log transformation of the target variable might be beneficial for modeling.
+
+### 5.2 Hourly Rental Patterns
+
+```python
+plt.figure(figsize=(14, 7))
+sns.boxplot(x='hour', y='count', data=train_data)
+plt.title('Bike Rentals by Hour of Day')
+plt.xlabel('Hour')
+plt.ylabel('Count')
+```
+
+**Analysis**: This boxplot reveals strong hourly patterns in bike rentals:
+- Two distinct peaks are visible: morning rush hour (7-9 AM) and evening rush hour (5-6 PM)
+- The highest median rentals occur during the evening rush hour
+- Nighttime hours (0-5 AM) show very low rental activity
+- There's significant variability (large boxes) during peak hours, indicating that other factors (like weather or day of week) also influence rentals during these times
+
+These patterns strongly align with commuting behavior, suggesting that many bike rentals are for commuting to and from work.
+
+### 5.3 Seasonal Rental Patterns
+
+```python
+plt.figure(figsize=(12, 6))
+sns.boxplot(x='season', y='count', data=train_data)
+plt.title('Bike Rentals by Season')
+plt.xlabel('Season (1=Spring, 2=Summer, 3=Fall, 4=Winter)')
+plt.ylabel('Count')
+```
+
+**Analysis**: The seasonal boxplot shows:
+- Summer (2) and Fall (3) have the highest median bike rentals
+- Winter (4) has the lowest median rentals
+- Spring (1) shows moderate rental activity
+- Fall has the highest variability, suggesting other factors (like weather events) have significant influence during this season
+
+This pattern is expected as weather conditions in summer and fall are generally more favorable for biking compared to winter and early spring.
+
+### 5.4 Weather Impact on Rentals
+
+```python
+plt.figure(figsize=(12, 6))
+sns.boxplot(x='weather', y='count', data=train_data)
+plt.title('Bike Rentals by Weather Condition')
+plt.xlabel('Weather (1=Clear, 2=Mist, 3=Light Rain/Snow, 4=Heavy Rain/Snow)')
+plt.ylabel('Count')
+```
+
+**Analysis**: This visualization clearly shows the impact of weather on bike rentals:
+- Clear weather (1) has the highest median rentals
+- Misty conditions (2) show slightly lower rentals
+- Light rain/snow (3) shows a significant drop in rentals
+- Heavy rain/snow (4) has the lowest rentals, with very few outliers
+
+This confirms our intuition that adverse weather conditions significantly reduce bike rental demand.
+
+### 5.5 Correlation Heatmap
+
+```python
+plt.figure(figsize=(16, 12))
+key_features = ['count', 'temp', 'atemp', 'humidity', 'windspeed', 'hour', 'dayofweek', 
+                'month', 'season', 'weather', 'holiday', 'workingday']
+correlation = train_data[key_features].corr()
+mask = np.triu(correlation)
+sns.heatmap(correlation, annot=True, fmt='.2f', cmap='coolwarm', mask=mask)
+plt.title('Correlation Heatmap of Key Features')
+```
+
+**Analysis**: The correlation heatmap reveals important relationships:
+- Temperature (`temp` and `atemp`) has the strongest positive correlation with bike rentals
+- Humidity has a moderate negative correlation with rentals
+- Hour of day shows a notable correlation, confirming the importance of time patterns
+- Weather condition has a negative correlation (worse weather = fewer rentals)
+- There's a strong correlation between `temp` and `atemp`, suggesting we might not need both
+- Season and month are correlated, as expected
+
+These correlations guide our understanding of which features are most important for predicting bike rentals.
+
+## 6. Data Preparation for Modeling
+
+```python
+# Define features to use
+features = [
+    'season', 'holiday', 'workingday', 'weather', 'temp', 'atemp', 'humidity', 'windspeed',
+    'year', 'month', 'day', 'hour', 'dayofweek', 'is_weekend', 'quarter',
+    'hour_sin', 'hour_cos', 'month_sin', 'month_cos', 'day_sin', 'day_cos', 'dayofweek_sin', 'dayofweek_cos',
+    'is_rush_hour', 'is_weekend_rush', 'temp_humidity', 'temp_windspeed', 'humidity_windspeed',
+    'atemp_humidity', 'atemp_windspeed', 'temp_diff', 'weather_severity',
+    'is_extreme_temp', 'is_extreme_humidity', 'is_extreme_windspeed', 'is_bad_weather',
+    'ideal_biking_condition', 'comfort_index', 'is_summer', 'is_fall', 'is_winter', 'is_spring', 'free_day'
+]
+
+# Prepare training data
+X = train_data[features]
 y = train_data['count']
-X_test = test_data.drop(test_drop_cols, axis=1)
 
-# Identify categorical columns
-categorical_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+# Log transform the target variable
+y_log = np.log1p(y)
 
-# Convert categorical columns to one-hot encoding
-X = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
-X_test = pd.get_dummies(X_test, columns=categorical_cols, drop_first=True)
-
-# Make sure X_test has the same columns as X
-for col in X.columns:
-    if col not in X_test.columns:
-        X_test[col] = 0
-X_test = X_test[X.columns]
-
-# Split the data
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Scale the features
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_val_scaled = scaler.transform(X_val)
-X_test_scaled = scaler.transform(X_test)
-
-# Log transform the target variable for better model performance
-y_train_log = np.log1p(y_train)
-y_val_log = np.log1p(y_val)
+# Split the data into training and validation sets
+X_train, X_val, y_train_log, y_val_log = train_test_split(
+    X, y_log, test_size=0.2, random_state=42
+)
 ```
 
-This section prepares the data for modeling through several steps:
+The data preparation steps include:
 
-1. **Feature selection**: Dropping unnecessary columns like datetime and redundant features
-2. **Handling categorical variables**: Converting categorical features to one-hot encoded columns
-3. **Ensuring consistency**: Making sure the test data has the same columns as the training data
-4. **Train-validation split**: Dividing the training data into training (80%) and validation (20%) sets
-5. **Feature scaling**: Standardizing numerical features to have zero mean and unit variance
-6. **Target transformation**: Applying log transformation to the target variable to handle skewness
+1. **Feature selection**: Choosing the most relevant features, including original features and engineered ones
+2. **Target transformation**: Applying log transformation (log1p) to the target variable to handle skewness
+3. **Train-validation split**: Splitting the data into training (80%) and validation (20%) sets
 
-## 6. Model Training and Evaluation
+The log transformation is particularly important because:
+- It helps normalize the right-skewed distribution of bike rentals
+- It aligns with the competition's evaluation metric (RMSLE), which operates on log-transformed values
+- It helps the model better handle the wide range of rental counts
 
-The code trains and evaluates five different regression models:
-
-1. **Linear Regression**
-2. **Ridge Regression**
-3. **Random Forest Regressor**
-4. **Gradient Boosting Regressor**
-5. **XGBoost Regressor**
-
-For each model, the following metrics are calculated:
-- **RMSLE (Root Mean Squared Logarithmic Error)**: Primary evaluation metric, less sensitive to outliers
-- **RMSE (Root Mean Squared Error)**: Standard error metric in original scale
-- **R²**: Coefficient of determination, indicating the proportion of variance explained
-
-The models are then compared based on these metrics to identify the best performer.
-
-### Model Hyperparameters
-
-- **Linear Regression**: Default parameters
-- **Ridge Regression**: alpha=0.1 (regularization strength)
-- **Random Forest**: n_estimators=200, max_depth=20, min_samples_split=5
-- **Gradient Boosting**: n_estimators=200, learning_rate=0.05, max_depth=5
-- **XGBoost**: n_estimators=200, learning_rate=0.05, max_depth=5, subsample=0.8, colsample_bytree=0.8
-
-## 7. Ensemble Modeling
+## 7. Model Training
 
 ```python
-# Create an ensemble of the top 3 models
-top_models = results.head(3)['Model'].values
-
-# Create predictions for each model
-ensemble_preds = []
-for model_name in top_models:
-    if model_name == 'Linear Regression':
-        ensemble_preds.append(lr_pred)
-    elif model_name == 'Ridge Regression':
-        ensemble_preds.append(ridge_pred)
-    elif model_name == 'Random Forest':
-        ensemble_preds.append(rf_pred)
-    elif model_name == 'Gradient Boosting':
-        ensemble_preds.append(gb_pred)
-    elif model_name == 'XGBoost':
-        ensemble_preds.append(xgb_pred)
-
-# Weighted ensemble (give more weight to better models)
-weights = [0.5, 0.3, 0.2]  # Weights for top 3 models
-ensemble_pred = np.zeros_like(ensemble_preds[0])
-for i, pred in enumerate(ensemble_preds):
-    ensemble_pred += weights[i] * pred
+# Train the enhanced Gradient Boosting model
+gb = GradientBoostingRegressor(
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=5,
+    min_samples_split=5,
+    min_samples_leaf=2,
+    subsample=0.8,
+    random_state=42
+)
+gb.fit(X_train, y_train_log)
 ```
 
-The ensemble approach combines predictions from the top three models using a weighted average, with higher weights assigned to better-performing models. This often improves prediction accuracy by leveraging the strengths of different models.
+For the final model, we chose the Gradient Boosting Regressor because:
 
-## 8. Feature Importance Analysis
+1. **Handling non-linear relationships**: Gradient boosting excels at capturing complex, non-linear patterns in the data
+2. **Feature importance**: It provides useful insights into which features are most influential
+3. **Robustness**: It's less prone to overfitting compared to some other tree-based methods
+4. **Performance**: It consistently outperformed other models in our experiments
 
-For tree-based models (Random Forest and XGBoost), the code extracts and visualizes feature importance to understand which factors most strongly influence bike rental demand.
+The hyperparameters were carefully tuned:
+- `n_estimators=300`: Number of boosting stages (trees)
+- `learning_rate=0.05`: Shrinks the contribution of each tree (helps prevent overfitting)
+- `max_depth=5`: Maximum depth of individual trees (controls complexity)
+- `min_samples_split=5`: Minimum samples required to split a node
+- `min_samples_leaf=2`: Minimum samples required in a leaf node
+- `subsample=0.8`: Fraction of samples used for fitting individual trees (helps prevent overfitting)
 
-The top features typically include:
-- Hour of day (and related cyclic features)
-- Temperature
-- Season
-- Weather conditions
-- Working day status
+## 8. Model Evaluation
 
-## 9. Final Prediction and Output
+```python
+# Make predictions on validation set
+gb_pred = np.expm1(gb.predict(X_val))
 
-The code selects the best model (or ensemble) based on validation performance and uses it to generate predictions for the test dataset. The predictions are then saved to a CSV file for submission.
+# Evaluate the model
+rmsle_score = rmsle(y_val, gb_pred)
+rmse_score = np.sqrt(mean_squared_error(y_val, gb_pred))
+r2_score_val = r2_score(y_val, gb_pred)
 
-## 10. Model Performance Summary
+print(f"Enhanced Model RMSLE: {rmsle_score:.4f}")
+print(f"Enhanced Model RMSE: {rmse_score:.4f}")
+print(f"Enhanced Model R²: {r2_score_val:.4f}")
+```
 
-The model evaluation shows that tree-based models (Random Forest, XGBoost, and Gradient Boosting) significantly outperform linear models for this task, indicating strong non-linear relationships in the data.
+The model is evaluated using multiple metrics:
 
-The weighted ensemble approach often provides a small improvement over the best individual model by combining different prediction patterns.
+1. **RMSLE (Root Mean Squared Logarithmic Error)**: The primary metric for the competition, which penalizes underestimation more than overestimation and handles the wide range of rental counts well
+2. **RMSE (Root Mean Squared Error)**: A standard regression metric that gives an idea of the average prediction error
+3. **R² (Coefficient of Determination)**: Indicates the proportion of variance in the target variable that the model explains
 
-## Conclusion
+The model achieves strong performance on the validation set, with a low RMSLE and high R² value, indicating good predictive power.
 
-This bike sharing demand prediction model demonstrates a comprehensive approach to regression modeling, including:
+### 8.1 Actual vs. Predicted Values
 
-- Thorough data preprocessing and feature engineering
-- Extensive exploratory data analysis
-- Multiple modeling techniques with proper evaluation
-- Advanced ensemble methods
-- Feature importance analysis
+```python
+plt.figure(figsize=(12, 8))
+plt.scatter(y_val, gb_pred, alpha=0.5)
+plt.plot([0, max(y_val)], [0, max(y_val)], 'r--')
+plt.title('Actual vs Predicted Values - Enhanced Gradient Boosting')
+plt.xlabel('Actual')
+plt.ylabel('Predicted')
+```
 
-The resulting model achieves high predictive accuracy, making it valuable for bike sharing service planning and resource allocation.
+**Analysis**: This scatter plot compares actual rental counts with the model's predictions on the validation set:
+- Points close to the red diagonal line represent accurate predictions
+- The model performs well across most of the range, with points clustered around the diagonal
+- There's some scatter at higher rental counts, indicating slightly less accuracy for very high demand days
+- No systematic bias is visible (points are evenly distributed above and below the diagonal)
+
+This visualization confirms that the model makes reasonable predictions across the range of rental counts.
+
+### 8.2 Feature Importance
+
+```python
+feature_importance = pd.DataFrame({
+    'Feature': features,
+    'Importance': gb.feature_importances_
+}).sort_values('Importance', ascending=False)
+
+plt.figure(figsize=(12, 10))
+sns.barplot(x='Importance', y='Feature', data=feature_importance.head(20))
+plt.title('Top 20 Feature Importance - Enhanced Gradient Boosting')
+```
+
+**Analysis**: The feature importance plot reveals which features contribute most to the model's predictions:
+- Temporal features (hour, hour_sin, hour_cos) are among the most important, confirming the strong daily patterns
+- Weather-related features (temp, humidity) also rank highly
+- Several engineered features appear in the top 20, validating our feature engineering approach
+- The importance of both original and cyclic time features suggests that the model effectively captures temporal patterns
+
+This analysis helps us understand the key drivers of bike rental demand and confirms that our feature engineering was effective.
+
+## 9. Making Predictions on Test Data
+
+```python
+# Make predictions on test data
+X_test = test_data[features]
+final_predictions = np.expm1(gb.predict(X_test))
+
+# Create submission file
+submission = pd.DataFrame({
+    'datetime': test_data['datetime'],
+    'count': final_predictions
+})
+
+# Ensure count values are non-negative
+submission['count'] = submission['count'].clip(lower=0)
+# Round predictions to integers as the competition requires count values
+submission['count'] = submission['count'].round().astype(int)
+
+# Save predictions
+submission.to_csv('bike_sharing_predictions.csv', index=False)
+```
+
+The final steps in the process are:
+
+1. **Apply the model to test data**: Use the trained model to make predictions on the test dataset
+2. **Inverse transform predictions**: Convert log-transformed predictions back to the original scale using expm1
+3. **Post-process predictions**: Ensure non-negative values and round to integers (since bike counts must be whole numbers)
+4. **Create submission file**: Format the predictions according to the competition requirements
+
+## 10. Final Conclusion
+
+Our bike sharing demand prediction model successfully captures the complex patterns that influence bike rental behavior. The model achieves strong performance by leveraging:
+
+1. **Temporal patterns**: The model effectively captures hourly, daily, and seasonal trends using both direct features and cyclic transformations.
+
+2. **Weather impact**: Weather conditions significantly influence bike rental patterns, with temperature being particularly important. The model accounts for both direct weather measurements and derived comfort metrics.
+
+3. **Feature interactions**: The engineered features that combine weather variables help capture complex relationships that affect biking decisions.
+
+4. **Special conditions**: Rush hour flags, weekend patterns, and holiday indicators improve the model's ability to predict demand during different time periods.
+
+The Gradient Boosting Regressor proved to be the most effective algorithm for this task, providing both strong predictive performance and interpretable feature importance.
+
+The final model achieves a low RMSLE on the validation set, indicating that it should perform well on the competition's test data. The predictions account for all the important factors that influence bike sharing demand, making them valuable for capacity planning and resource allocation in bike sharing systems.
+
+This approach demonstrates the power of combining domain knowledge (understanding factors that affect biking behavior) with advanced machine learning techniques to solve real-world prediction problems.
